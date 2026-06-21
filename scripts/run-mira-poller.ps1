@@ -14,7 +14,8 @@ py "$Project\scripts\nexusai_agent_worker.py" `
   --base-url "http://192.168.1.134:5055" `
   --agent "Mira" `
   --ack `
-  --auto-reply 2>&1 | Out-File -FilePath $Log -Append
+  --auto-reply `
+  --auto-reply-mode "template" 2>&1 | Out-File -FilePath $Log -Append
 
 "Exit code: $LASTEXITCODE" | Out-File -FilePath $Log -Append
 "--- Mira poller end: $(Get-Date) ---" | Out-File -FilePath $Log -Append
