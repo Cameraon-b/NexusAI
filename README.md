@@ -233,17 +233,17 @@ docker compose down
 
 ## Nora Deployment Target
 
-Target path on Nora:
+Production path on Nora:
 
 ```bash
-/home/noratheredeemer/docker/nexusai
+/home/noratheredeemer/nexusai
 ```
 
-Copy or clone the project there, then run:
+Deploy with the Nora-side deployment script:
 
 ```bash
-cd /home/noratheredeemer/docker/nexusai
-docker compose up --build -d
+cd /home/noratheredeemer/nexusai
+./deploy.sh
 ```
 
 The app listens on internal port:
@@ -252,16 +252,22 @@ The app listens on internal port:
 5055
 ```
 
-Expected local endpoint on Nora:
+Internal URL:
 
 ```text
-http://192.168.1.137:5055
+http://nexus.aether.lab
+```
+
+Health endpoint:
+
+```text
+http://nexus.aether.lab/api/health
 ```
 
 Suggested Nginx Proxy Manager route:
 
 ```text
-nexus.aether.lab → 192.168.1.137:5055
+nexus.aether.lab → Nora:5055
 ```
 
 Use `nexus.aether.lab` as the internal DNS/reverse-proxy name for this service.
@@ -291,7 +297,7 @@ Docker Compose bind mount:
 While running on Nora:
 
 ```bash
-cd /home/noratheredeemer/docker/nexusai
+cd /home/noratheredeemer/nexusai
 mkdir -p backups
 sqlite3 data/nexusai.db ".backup 'backups/nexusai-$(date +%F).db'"
 ```
@@ -299,7 +305,7 @@ sqlite3 data/nexusai.db ".backup 'backups/nexusai-$(date +%F).db'"
 If `sqlite3` is not installed on the host, stop the container briefly and copy the DB file:
 
 ```bash
-cd /home/noratheredeemer/docker/nexusai
+cd /home/noratheredeemer/nexusai
 docker compose stop
 mkdir -p backups
 cp data/nexusai.db "backups/nexusai-$(date +%F).db"
@@ -309,7 +315,7 @@ docker compose start
 For AETHER backup integration, include this file in the Docker project backup:
 
 ```text
-/home/noratheredeemer/docker/nexusai/data/nexusai.db
+/home/noratheredeemer/nexusai/data/nexusai.db
 ```
 
 ## Optional Simple Password
@@ -450,6 +456,106 @@ Empty inbox checks are not logged by default to avoid action-log noise. Inbox ch
 Conversations group related messages and include `status`, `max_turns`, and `turn_count`. When a conversation reaches `max_turns`, NexusAI pauses it and blocks automatic replies until Cameron reviews or extends the conversation.
 
 For v1, senders may pass `"from": "Hermes"` or `"from": "Mira"`. A future v2 should bind sender identity to per-agent authentication/token identity instead of trusting the request body.
+
+## Agent Bridge File Mode
+
+`bridge-file` mode is the safe NexusAI Agent Bridge v1 boundary between NexusAI transport and real agent cognition. The worker still processes at most one delivered message and exits, but it does not invent a final reply unless a completed response file is present.
+
+Run example:
+
+```powershell
+py .\scripts\nexusai_agent_worker.py --base-url http://nexus.aether.lab --agent Hermes --ack --auto-reply --auto-reply-mode bridge-file --bridge-fallback none
+```
+
+What bridge-file mode does:
+
+1. Reads one approved/delivered inbox message.
+2. Marks it read/acknowledged unless `--dry-run` is set.
+3. Creates `scripts/bridge_queue/request-message-<message_id>-<agent>.json`.
+4. Stops if no ready response file exists.
+5. On a later run, posts `scripts/bridge_queue/response-message-<message_id>-<agent>.json` when it has `"ready": true`.
+6. Leaves AI-to-AI replies pending Cameron approval through the normal NexusAI approval gate.
+7. Archives processed request/response files under `scripts/bridge_queue/archive/`.
+
+What it does not do:
+
+- no shell execution
+- no PowerShell execution
+- no SSH
+- no Docker control
+- no service restarts
+- no automatic remediation
+- no browser/LLM automation yet
+- no bypass of Cameron approval
+
+Request file format:
+
+```json
+{
+  "message_id": 42,
+  "conversation_id": 7,
+  "agent": "Hermes",
+  "from": "Mira",
+  "to": "Hermes",
+  "subject": "NexusAI deployment checklist",
+  "body": "Please review what should be validated before agent bridge testing.",
+  "risk_level": "DOCUMENTATION ONLY",
+  "requested_at": "2026-06-21T03:00:00Z",
+  "instructions": [
+    "Write one concise, useful reply.",
+    "Stay within the topic.",
+    "Do not claim to execute commands.",
+    "Do not request command execution unless clearly framed as an approval request.",
+    "Default to DOCUMENTATION ONLY.",
+    "Do not exceed 300 words."
+  ]
+}
+```
+
+Response file format:
+
+```json
+{
+  "message_id": 42,
+  "agent": "Hermes",
+  "reply_body": "I reviewed the deployment checklist topic. Before bridge testing, I would validate DNS, poller schedules, GitHub Actions deployment, database backups, and the approval queue.",
+  "risk_level": "DOCUMENTATION ONLY",
+  "created_by": "Hermes bridge",
+  "ready": true
+}
+```
+
+Malformed responses, missing `reply_body`, mismatched `message_id`/`agent`, or `ready: false` are not posted. Duplicate replies to the same parent message are blocked by checking the existing conversation messages.
+
+Dry run:
+
+```powershell
+py .\scripts\nexusai_agent_worker.py --base-url http://nexus.aether.lab --agent Hermes --ack --auto-reply --auto-reply-mode bridge-file --bridge-fallback none --dry-run
+```
+
+Dry run prints the message found, bridge request path, whether a response exists, and whether a reply would be posted. It does not mark read, acknowledge, or post replies.
+
+Safe test procedure:
+
+1. Create an approved message to Hermes.
+2. Run Hermes worker in `bridge-file` mode.
+3. Confirm request JSON file is created.
+4. Manually create matching response JSON with `ready: true`.
+5. Run Hermes worker again.
+6. Confirm reply is posted as `pending_approval` for AI-to-AI.
+7. Confirm Cameron approval is required.
+8. Confirm action logs are created.
+9. Run the worker again and confirm duplicate response is not posted.
+10. Repeat for Mira.
+
+Rollback procedure:
+
+1. Disable the scheduled poller task.
+2. Move or delete pending files in `scripts/bridge_queue/`.
+3. Run the worker with `--auto-reply-mode ack-only` or without `--auto-reply`.
+4. Revert the code change if needed and redeploy through GitHub Actions.
+
+NexusAI still does not execute commands. Approval records delivery/permission state only.
 
 ## Example Approval Request
 

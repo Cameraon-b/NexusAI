@@ -351,6 +351,8 @@ def create_message(payload: MessageCreate, _: None = Depends(require_local_passw
         recipient_type = conn.execute("SELECT participant_type FROM participants WHERE id=?", (recipient,)).fetchone()["participant_type"]
         is_ai_to_ai = sender_type in {"ai", "agent_runtime"} and recipient_type in {"ai", "agent_runtime"}
         requested_risk = payload.risk_level.value
+        if requested_risk == "AI-TO-AI PENDING":
+            requested_risk = "DOCUMENTATION ONLY"
         requires_approval = payload.requires_approval or is_ai_to_ai or requested_risk == "UNKNOWN / NEEDS REVIEW"
         status_value = "pending_approval" if requires_approval else payload.status.value
         delivery_status = "pending_approval" if requires_approval else "delivered"
@@ -383,7 +385,7 @@ def create_message(payload: MessageCreate, _: None = Depends(require_local_passw
         log_action(conn, sender, "create", "message", item_id, f"Message to {payload.to}: {payload.subject}")
         if requires_approval:
             cameron = participant_id(conn, "Cameron")
-            reason = "AI-to-AI messages require Admin approval by default." if is_ai_to_ai else "Message risk requires approval."
+            reason = "AI-to-AI messages require Cameron approval by default." if is_ai_to_ai else "Message risk requires approval."
             approval = conn.execute(
                 """
                 INSERT INTO approval_requests (requested_by_id, requested_for_id, target_type, target_id, action_type, action_summary, reason, risk_level_id, status)

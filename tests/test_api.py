@@ -1,8 +1,12 @@
 import os
+import sys
 from contextlib import contextmanager
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
+import nexusai_agent_worker as worker  # noqa: E402
 
 from app.main import app
 
@@ -65,7 +69,7 @@ def test_ai_to_ai_message_requires_approval_and_approval_delivers(tmp_path):
             'to': 'Hermes',
             'subject': 'README update request',
             'body': 'Please review the README wording.',
-            'risk_level': 'DOCUMENTATION ONLY',
+            'risk_level': 'AI-TO-AI PENDING',
             'status': 'delivered',
         })
         assert res.status_code == 201
@@ -287,6 +291,46 @@ def test_conversation_max_turns_pauses_replies(tmp_path):
         blocked = c.post(f"/api/messages/{msg['id']}/reply", json={'from': 'Hermes', 'body': 'Should be blocked.'})
         assert blocked.status_code == 409
         assert c.get(f"/api/conversations/{conv['id']}").json()['status'] == 'paused'
+
+
+def test_bridge_file_response_validation_and_archival(tmp_path):
+    message = {
+        'id': 42,
+        'conversation_id': 7,
+        'from': 'Mira',
+        'to': 'Hermes',
+        'subject': 'NexusAI deployment checklist',
+        'body': 'Please review what should be validated before agent bridge testing.',
+        'risk_level': 'DOCUMENTATION ONLY',
+    }
+    request_path, response_path = worker.bridge_paths(tmp_path, 42, 'Hermes')
+    created = worker.write_bridge_request(request_path, message, 'Hermes')
+    assert created is True
+    request_body = request_path.read_text(encoding='utf-8')
+    assert 'Do not claim to execute commands' in request_body
+    assert 'NexusAI deployment checklist' in request_body
+
+    response_path.write_text('{not json', encoding='utf-8')
+    response, status = worker.load_bridge_response(response_path, 42, 'Hermes')
+    assert response is None
+    assert status.startswith('malformed JSON')
+
+    response_path.write_text('{"message_id": 42, "agent": "Hermes", "ready": false}', encoding='utf-8')
+    response, status = worker.load_bridge_response(response_path, 42, 'Hermes')
+    assert response is None
+    assert status == 'not ready'
+
+    response_path.write_text(
+        '{"message_id": 42, "agent": "Hermes", "reply_body": "Bridge response ready.", "risk_level": "DOCUMENTATION ONLY", "ready": true}',
+        encoding='utf-8',
+    )
+    response, status = worker.load_bridge_response(response_path, 42, 'Hermes')
+    assert status == 'ready'
+    assert response['reply_body'] == 'Bridge response ready.'
+    worker.archive_bridge_files(request_path, response_path)
+    assert not request_path.exists()
+    assert not response_path.exists()
+    assert list((tmp_path / 'archive').glob('*processed*.json'))
 
 
 def test_ui_static_exposes_design_views_and_no_run_buttons(tmp_path):

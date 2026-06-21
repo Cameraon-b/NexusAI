@@ -9,3 +9,5 @@ data/nexusai-seen-*.json
 data/test-seen-*.json
 backups/
 logs/
+scripts/bridge_queue/*.json
+scripts/bridge_queue/archive/

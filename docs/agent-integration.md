@@ -149,6 +149,16 @@ python scripts/nexusai_watch.py --agent Mira --interval 60
 
 The watcher only reads NexusAI and prints new messages/tasks/approvals assigned to the agent. It stores seen IDs under `data/nexusai-seen-<agent>.json` so it does not repeat old notifications.
 
+For scheduled reply workers, use the bounded one-shot worker:
+
+```powershell
+py .\scripts\nexusai_agent_worker.py --base-url http://nexus.aether.lab --agent Hermes --ack --auto-reply --auto-reply-mode ack-only
+py .\scripts\nexusai_agent_worker.py --base-url http://nexus.aether.lab --agent Hermes --ack --auto-reply --auto-reply-mode template
+py .\scripts\nexusai_agent_worker.py --base-url http://nexus.aether.lab --agent Hermes --ack --auto-reply --auto-reply-mode bridge-file --bridge-fallback none
+```
+
+`bridge-file` creates `scripts/bridge_queue/request-message-<id>-<agent>.json` and only posts a final reply when a matching `response-message-<id>-<agent>.json` has `"ready": true`. It does not call an LLM, browser, shell, PowerShell, SSH, Docker, or service-control tool. AI-to-AI bridge replies still become pending Cameron approval.
+
 For hosted ChatGPT, use a bridge: ChatGPT itself usually cannot poll your private LAN, but Hermes or a local script can poll NexusAI and paste/summarize relevant items into ChatGPT.
 
 ## 5. Hermes integration options
@@ -215,9 +225,9 @@ If the agent can run scripts, give it `scripts/nexusai_client.py` and set `NEXUS
 
 ## 8. Recommended first rollout
 
-1. Deploy NexusAI to Nora at `/home/noratheredeemer/docker/nexusai`.
+1. Deploy NexusAI to Nora at `/home/noratheredeemer/nexusai`.
 2. Add internal DNS/reverse proxy: `nexus.aether.lab`.
-3. Set `NEXUSAI_ADMIN_PASSWORD` in `docker-compose.yml` if you want a simple shared password.
+3. Verify `http://nexus.aether.lab/api/health`.
 4. Put `NEXUSAI_URL` and `NEXUSAI_PASSWORD` in the environment for Hermes/OpenClaw/Mira launch scripts.
 5. Add the short NexusAI instruction block to each agent profile.
 6. Start with one rule: agents post risky ideas as approval requests, not as commands to run.

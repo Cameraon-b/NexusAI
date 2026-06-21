@@ -67,8 +67,10 @@ def test_template_reply_adds_safety_line_only_for_system_change_topics():
     assert "execution" in body.lower() or "executed" in body.lower()
 
 
-def test_agent_bridge_mode_is_explicit_placeholder():
+def test_agent_bridge_mode_aliases_bridge_file_and_does_not_generate_immediate_body():
+    parser = worker.build_parser()
+    args = parser.parse_args(["--agent", "Hermes", "--auto-reply", "--auto-reply-mode", "bridge-file", "--bridge-fallback", "none"])
+    assert args.auto_reply_mode == "bridge-file"
     message = {"subject": "Future bridge", "body": "Please hand this to the real runtime later."}
-
-    with pytest.raises(NotImplementedError):
-        worker.build_auto_reply_body(message, "agent-bridge")
+    with pytest.raises(ValueError):
+        worker.build_auto_reply_body(message, "bridge-file")

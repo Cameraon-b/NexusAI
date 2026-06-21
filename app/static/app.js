@@ -27,7 +27,19 @@ async function api(path, options = {}) {
 }
 function esc(value) { return String(value ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c])); }
 function titleize(value) { return String(value ?? '').replaceAll('_', ' ').replace(/\b\w/g, c => c.toUpperCase()); }
-function riskBadge(risk) { return `<span class="risk">${esc(risk || 'UNKNOWN / NEEDS REVIEW')}</span>`; }
+function riskClass(risk, item = {}) {
+  const text = String(risk || '').toUpperCase();
+  if (item.status === 'pending_approval' || item.delivery_status === 'pending_approval') return 'pending-ai';
+  if (text.includes('SAFE')) return 'safe';
+  if (text.includes('DOCUMENTATION')) return 'doc';
+  if (text.includes('BACKUP')) return 'backup';
+  if (text.includes('STATE-CHANGING')) return 'state';
+  if (text.includes('RESTORE')) return 'restore';
+  if (text.includes('DESTRUCTIVE')) return 'destructive';
+  if (text.includes('UNKNOWN')) return 'unknown';
+  return '';
+}
+function riskBadge(risk, item = {}) { return `<span class="risk ${riskClass(risk, item)}">${esc(risk || 'UNKNOWN / NEEDS REVIEW')}</span>`; }
 function statusPill(status) { return `<span class="status">${esc(titleize(status || 'unknown'))}</span>`; }
 function select(name, values, selected) { return `<select name="${esc(name)}">${values.map(v => `<option value="${esc(v)}" ${v===selected?'selected':''}>${esc(v)}</option>`).join('')}</select>`; }
 function truncate(value, max = 115) { const text = String(value ?? ''); return text.length > max ? `${text.slice(0, max - 1)}…` : text; }
@@ -43,25 +55,38 @@ function table(items, columns) {
 }
 
 async function dashboard() {
-  const data = await api('/dashboard');
-  page('Operations Dashboard', 'Homepage focused on approvals, active work, messages, notices, and audit history.', `
+  const [data, conversations] = await Promise.all([api('/dashboard'), api('/conversations')]);
+  const pendingAi = data.pending_approvals.filter(a => a.action_type === 'ai_to_ai_delivery');
+  const agentLogs = latestAgentLogs(data.recent_logs);
+  page('AETHER Operations Console', 'Attention Required, Agent Activity, approvals, conversations, notices, and audit history.', `
+    <div class="safety-banner">Approval does not equal execution. NexusAI coordinates messages, approvals, and audit history only.</div>
     <div class="metrics">
       ${card('Pending Approvals', data.pending_approvals.length, '/approvals')}
+      ${card('AI-to-AI Waiting', pendingAi.length, '/approvals')}
       ${card('Open Tasks', data.open_tasks.length, '/tasks')}
-      ${card('Unread Messages', data.open_messages.length, '/messages')}
       ${card('Active Notices', data.active_notices.length, '/notices')}
     </div>
     <div class="dashboard-grid">
-      ${section('Needs Cameron Approval', recordList(data.pending_approvals, approvalRow))}
+      ${section('Attention Required', recordList([...pendingAi, ...data.open_tasks.filter(t => t.status === 'blocked')], item => item.action_type ? approvalRow(item) : taskRow(item)))}
+      ${section('Agent Activity', agentActivity(agentLogs))}
+      ${section('Approval Queue', recordList(data.pending_approvals, approvalRow))}
+      ${section('Conversation Threads', recordList(conversations.slice(0, 8), conversationRow))}
       ${section('Recent Messages', recordList(data.open_messages, messageRow))}
-      ${section('My Open Tasks', recordList(data.open_tasks, taskRow))}
       ${section('System Notices', recordList(data.active_notices, noticeRow))}
+      ${section('Deployment Status', deploymentStatus(), true)}
       ${section('Recent Action Log', logLines(data.recent_logs), true)}
     </div>`);
 }
-function messageRow(item) { return `<button class="record-row" onclick="openMessage(${item.id})"><span>${riskBadge(item.risk_level)}${statusPill(item.status)}</span><div class="row-title">${esc(item.from)} → ${esc(item.to)}: ${esc(item.subject)}</div><div class="row-meta">${esc(truncate(item.body))}</div></button>`; }
-function taskRow(item) { return `<button class="record-row" onclick="openTask(${item.id})"><span>${riskBadge(item.risk_level)}${statusPill(item.status)}</span><div class="row-title">${esc(item.title)}</div><div class="row-meta">${esc(item.assigned_to)} · ${esc(truncate(item.description))}</div></button>`; }
-function approvalRow(item) { return `<button class="record-row" onclick="openApproval(${item.id})"><span>${riskBadge(item.risk_level)}${statusPill(item.status)}</span><div class="row-title">${esc(item.action_summary)}</div><div class="row-meta">Reason: ${esc(truncate(item.reason || 'No reason given'))}</div></button>`; }
+function latestAgentLogs(logs) {
+  const agents = ['Hermes', 'Mira', 'Nova'];
+  return agents.map(agent => ({agent, last: logs.find(l => l.actor === agent) || null}));
+}
+function agentActivity(items) { return `<div class="record-list">${items.map(i => `<div class="record-row"><div class="row-title">${esc(i.agent)}</div><div class="row-meta">${i.last ? `${esc(i.last.timestamp)} · ${esc(i.last.action_type)} · ${esc(truncate(i.last.summary, 90))}` : 'No recent activity in latest log window.'}</div><div class="row-meta">Mode: scheduled poller / bridge-file capable</div></div>`).join('')}</div>`; }
+function deploymentStatus() { return `<div class="record-list"><div class="record-row"><div class="row-title">Nora deployment</div><div class="row-meta">Internal URL: http://nexus.aether.lab · Health: /api/health · Deploy path: /home/noratheredeemer/nexusai</div></div><div class="record-row"><div class="row-title">Safety boundary</div><div class="row-meta">GitHub Actions deployment is separate from NexusAI approval records. NexusAI does not run commands.</div></div></div>`; }
+function messageRow(item) { return `<button class="record-row" onclick="openMessage(${item.id})"><span>${riskBadge(item.risk_level, item)}${statusPill(item.status)}</span><div class="row-title">${esc(item.from)} → ${esc(item.to)}: ${esc(item.subject)}</div><div class="row-meta">${esc(truncate(item.body))}</div></button>`; }
+function taskRow(item) { return `<button class="record-row" onclick="openTask(${item.id})"><span>${riskBadge(item.risk_level, item)}${statusPill(item.status)}</span><div class="row-title">${esc(item.title)}</div><div class="row-meta">${esc(item.assigned_to)} · ${esc(truncate(item.description))}</div></button>`; }
+function approvalRow(item) { return `<button class="record-row" onclick="openApproval(${item.id})"><span>${riskBadge(item.risk_level, item)}${statusPill(item.status)}</span><div class="row-title">${esc(item.action_summary)}</div><div class="row-meta">Reason: ${esc(truncate(item.reason || 'No reason given'))}</div></button>`; }
+function conversationRow(item) { return `<button class="record-row" onclick="openConversation(${item.id})"><span>${statusPill(item.status)}</span><div class="row-title">${esc(item.title)}</div><div class="row-meta">Turns ${esc(item.turn_count)} / ${esc(item.max_turns)} · ${esc(item.created_by)}</div></button>`; }
 function reviewRow(item) { return `<button class="record-row" onclick="openReview(${item.id})"><span>${riskBadge(item.risk_level)}${statusPill(item.status)}</span><div class="row-title">${esc(item.title)}</div><div class="row-meta">${esc(item.requested_by)} → ${esc(item.reviewer)} · ${esc(truncate(item.body))}</div></button>`; }
 function noticeRow(item) { return `<button class="record-row" onclick="openNotice(${item.id})"><span>${riskBadge(item.risk_level)}${statusPill(item.status)}</span><div class="row-title">${esc(item.service || item.source)}: ${esc(item.title)}</div><div class="row-meta">${esc(truncate(item.body))}</div></button>`; }
 function logLines(items) { return items.length ? items.map(l => `<div>${esc(l.timestamp)} ${esc(l.actor)} ${esc(l.summary)}</div>`).join('') : '<p class="empty-state">No audit log entries yet.</p>'; }
@@ -168,7 +193,10 @@ async function openApproval(id) {
     </div></section>`);
 }
 async function createApproval(event) { event.preventDefault(); await api('/approvals', {method:'POST', body: JSON.stringify(formData(event))}); route(); }
-async function patchApproval(id, status) { await api(`/approvals/${id}`, {method:'PATCH', body: JSON.stringify({status, approved_by:'Cameron', decision_notes:`Cameron marked ${status}.`})}); openApproval(id); }
+async function patchApproval(id, status) {
+  const item = await api(`/approvals/${id}`, {method:'PATCH', body: JSON.stringify({status, approved_by:'Cameron', decision_notes:`Cameron marked ${status}.`})});
+  page('Approval Updated', `Approval #${id} was marked ${status}.`, `<div class="feedback">Decision recorded. Approval does not equal execution.</div><section class="detail-card"><h2>Approval Request #${item.id}</h2><div class="detail-card-body"><p>Status: ${esc(titleize(item.status))}</p><p>Requested by: ${esc(item.requested_by)}</p><p>For: ${esc(item.requested_for)}</p><div class="detail-actions">${actionButton('Back to approval detail', `openApproval(${item.id})`)}${actionButton('Approval queue', `window.location.href='/approvals'`)}</div></div></section>`);
+}
 
 async function pageReviews() {
   const items = await api('/reviews');
@@ -198,7 +226,12 @@ async function createNotice(event) { event.preventDefault(); await api('/notices
 async function patchNotice(id, status) { await api(`/notices/${id}`, {method:'PATCH', body: JSON.stringify({status})}); openNotice(id); }
 
 async function pageServices() { const items = await api('/services'); page('Services', 'Internal systems and applications that NexusAI tracks or receives notices from.', table(items, [{label:'Name', key:'name'},{label:'Type', key:'service_type'},{label:'URL', key:'url'},{label:'Host', key:'host'},{label:'Notes', key:'notes'},{label:'Active', render:i=> i.is_active ? 'yes' : 'no'}])); }
-async function pageConversations() { const items = await api('/conversations'); page('Conversations', 'Conversation threads group related messages and enforce max-turn safety limits.', table(items, [{label:'ID', key:'id'},{label:'Title', key:'title'},{label:'Status', render:i=>statusPill(i.status)},{label:'Created By', key:'created_by'},{label:'Turns', render:i=>`${esc(i.turn_count)} / ${esc(i.max_turns)}`},{label:'Summary', render:i=>esc(truncate(i.summary || ''))}])); }
+async function pageConversations() { const items = await api('/conversations'); page('Conversation Threads', 'Read AI-to-AI exchanges as timelines with turn counts and approval state.', table(items, [{label:'Open', render:i=>`<button class="compact" onclick="openConversation(${i.id})">Timeline</button>`},{label:'Title', key:'title'},{label:'Status', render:i=>statusPill(i.status)},{label:'Created By', key:'created_by'},{label:'Turns', render:i=>`${esc(i.turn_count)} / ${esc(i.max_turns)}`},{label:'Summary', render:i=>esc(truncate(i.summary || ''))}])); }
+async function openConversation(id) {
+  const [conv, messages] = await Promise.all([api(`/conversations/${id}`), api(`/conversations/${id}/messages`)]);
+  const timeline = messages.map(m => `<div class="timeline-item ${m.status === 'pending_approval' ? 'pending' : ''}"><div class="timeline-meta">${esc(m.created_at)} · ${esc(m.from)} → ${esc(m.to)} · ${statusPill(m.status)} ${riskBadge(m.risk_level, m)}</div><strong>${esc(m.subject)}</strong><div>${esc(m.body)}</div></div>`).join('') || '<p class="empty-state">No messages in this conversation.</p>';
+  page('Conversation Timeline', `${conv.title} · ${conv.status} · turns ${conv.turn_count}/${conv.max_turns}`, `<section class="detail-card"><h2>Conversation #${conv.id}</h2><div class="detail-card-body"><p>Created by: ${esc(conv.created_by)}</p><p>Status: ${esc(titleize(conv.status))}</p><p>Summary: ${esc(conv.summary || '—')}</p><div class="timeline">${timeline}</div></div></section>`);
+}
 async function pageParticipants() { const items = await api('/participants'); page('Participants', 'Humans, AI assistants, services, and system identities that create, receive, or are assigned NexusAI records.', table(items, [{label:'Display Name', key:'display_name'},{label:'Type', key:'participant_type'},{label:'Role', key:'role_description'},{label:'Active', render:i=> i.is_active ? 'yes' : 'no'}])); }
 async function pageLogs() { const items = await api('/logs'); page('Action Log', 'Append-only audit history. Meaningful activity inside NexusAI creates a log entry.', table(items, [{label:'Time', key:'timestamp'},{label:'Actor', key:'actor'},{label:'Action', key:'action_type'},{label:'Entity', render:i=>`${esc(i.target_type)} #${esc(i.target_id ?? '')}`},{label:'Summary', key:'summary'}])); }
 async function patchStatus(type, id, status) { await api(`/${type}/${id}`, {method:'PATCH', body: JSON.stringify({status})}); route(); }
