@@ -1,0 +1,21 @@
+name: Deploy NexusAI to Nora
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Deploy on Nora
+    runs-on: [self-hosted, linux, x64, nora, nexusai]
+
+    steps:
+      - name: Show runner identity
+        run: |
+          hostname
+          whoami
+          pwd
+
+      - name: Deploy NexusAI
+        run: |
+          cd /home/noratheredeemer/nexusai
+          ./deploy.sh
