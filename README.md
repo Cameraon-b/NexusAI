@@ -270,7 +270,7 @@ Version/build endpoint:
 http://nexus.aether.lab/api/version
 ```
 
-`deploy.sh` writes the current short Git commit to `.nexusai_commit` after `git pull`. The UI footer reads `/api/version` and displays the app name, prototype version, commit, environment, and host so Cameron can confirm Nora is running the expected build.
+`deploy.sh` writes the current short Git commit to `.nexusai_commit` for host-side reference and writes `.env` with `NEXUSAI_COMMIT`, `NEXUSAI_ENVIRONMENT=AETHER`, and `NEXUSAI_HOST=Nora`. `docker-compose.yml` loads that file with `env_file: .env`, so the running container can report the active build even though the Docker image only copies `app/`. The UI footer reads `/api/version` and displays the app name, prototype version, commit, environment, and host so Cameron can confirm Nora is running the expected build.
 
 Suggested Nginx Proxy Manager route:
 

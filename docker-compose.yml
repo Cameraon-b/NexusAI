@@ -5,6 +5,8 @@ services:
     restart: unless-stopped
     ports:
       - "5055:5055"
+    env_file:
+      - .env
     environment:
       NEXUSAI_DB_PATH: /data/nexusai.db
       # Optional simple shared password for API/UI fetches.

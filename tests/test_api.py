@@ -42,6 +42,27 @@ def test_version_endpoint_returns_build_info_without_commit_file(tmp_path, monke
         assert data['host'] == 'Nora'
 
 
+def test_version_endpoint_prefers_runtime_environment_commit(tmp_path, monkeypatch):
+    from app import main as app_main
+
+    commit_file = tmp_path / '.nexusai_commit'
+    commit_file.write_text('file9999\n', encoding='utf-8')
+    monkeypatch.setattr(app_main, 'COMMIT_FILE', commit_file)
+    monkeypatch.setenv('NEXUSAI_COMMIT', 'env1234')
+    monkeypatch.setenv('NEXUSAI_ENVIRONMENT', 'AETHER')
+    monkeypatch.setenv('NEXUSAI_HOST', 'Nora')
+
+    with client(tmp_path) as c:
+        data = c.get('/api/version').json()
+        assert data == {
+            'app': 'NexusAI',
+            'version': '0.05',
+            'commit': 'env1234',
+            'environment': 'AETHER',
+            'host': 'Nora',
+        }
+
+
 def test_health_endpoint_includes_version_build_info(tmp_path, monkeypatch):
     from app import main as app_main
 

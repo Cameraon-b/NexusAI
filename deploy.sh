@@ -44,6 +44,13 @@ else
     echo "WARNING: could not determine git commit; version endpoint will report unknown commit"
 fi
 
+cat > .env <<EOF
+NEXUSAI_COMMIT=$NEW_COMMIT
+NEXUSAI_ENVIRONMENT=AETHER
+NEXUSAI_HOST=Nora
+EOF
+echo "Wrote runtime version environment to $APP_DIR/.env"
+
 echo
 echo "Rebuilding and restarting NexusAI..."
 sudo docker compose up --build -d
