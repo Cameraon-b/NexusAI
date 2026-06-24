@@ -11,11 +11,64 @@ jobs:
     steps:
       - name: Show runner identity
         run: |
+          set -e
+          echo "Hostname:"
           hostname
+
+          echo "User:"
           whoami
+
+          echo "Working directory:"
           pwd
+
+          echo "Runner labels target:"
+          echo "self-hosted, linux, x64, nora, nexusai"
+
+      - name: Sync Nora repo to GitHub main
+        run: |
+          set -e
+          cd /home/noratheredeemer/nexusai
+
+          echo "Before sync:"
+          git rev-parse --short HEAD
+          git status --short
+
+          echo "Fetching origin/main..."
+          git fetch origin main
+
+          echo "Resetting Nora working tree to origin/main..."
+          git reset --hard origin/main
+
+          echo "After sync:"
+          git rev-parse --short HEAD
+          git log --oneline -5
 
       - name: Deploy NexusAI
         run: |
+          set -e
           cd /home/noratheredeemer/nexusai
+
+          echo "Making deploy.sh executable..."
+          chmod +x deploy.sh
+
+          echo "Running deploy.sh..."
           ./deploy.sh
+
+      - name: Verify deployment
+        run: |
+          set -e
+          cd /home/noratheredeemer/nexusai
+
+          echo "Nora repo commit after deploy:"
+          git rev-parse --short HEAD
+
+          echo "Docker compose status:"
+          sudo docker compose ps
+
+          echo "Version endpoint:"
+          curl -s http://127.0.0.1:5055/api/version || true
+
+          echo ""
+          echo "Recent NexusAI container logs:"
+          sudo docker compose logs --tail=50 nexusai
+```
