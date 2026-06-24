@@ -71,4 +71,3 @@ jobs:
           echo ""
           echo "Recent NexusAI container logs:"
           sudo docker compose logs --tail=50 nexusai
-```
