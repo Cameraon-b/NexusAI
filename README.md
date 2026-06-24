@@ -470,12 +470,12 @@ py .\scripts\nexusai_agent_worker.py --base-url http://nexus.aether.lab --agent 
 What bridge-file mode does:
 
 1. Reads one approved/delivered inbox message.
-2. Marks it read/acknowledged unless `--dry-run` is set.
-3. Creates `scripts/bridge_queue/request-message-<message_id>-<agent>.json`.
-4. Stops if no ready response file exists.
-5. On a later run, posts `scripts/bridge_queue/response-message-<message_id>-<agent>.json` when it has `"ready": true`.
-6. Leaves AI-to-AI replies pending Cameron approval through the normal NexusAI approval gate.
-7. Archives processed request/response files under `scripts/bridge_queue/archive/`.
+2. Creates `scripts/bridge_queue/request-message-<message_id>-<agent>.json` without marking the parent read/acknowledged yet.
+3. Stops if no ready response file exists.
+4. On a later run, posts `scripts/bridge_queue/response-message-<message_id>-<agent>.json` when it has `"ready": true`.
+5. Leaves AI-to-AI replies pending Cameron approval through the normal NexusAI approval gate.
+6. Archives processed request/response files under `scripts/bridge_queue/archive/`.
+7. After a successful bridge reply post, does best-effort read/ack completion for the parent message.
 
 What it does not do:
 
@@ -526,6 +526,27 @@ Response file format:
 ```
 
 Malformed responses, missing `reply_body`, mismatched `message_id`/`agent`, or `ready: false` are not posted. Duplicate replies to the same parent message are blocked by checking the existing conversation messages.
+
+Bridge responder:
+
+```powershell
+py .\scripts\nexusai_bridge_responder.py --agent Hermes --bridge-dir .\scripts\bridge_queue --mode template
+```
+
+The responder reads at most one pending request and writes the matching response JSON for the worker to consume. It does not post to NexusAI, approve anything, or execute commands. Modes:
+
+- `template` — deterministic local reply generation; no external API/model required.
+- `manual-prompt` — prints a ready-to-copy prompt for Cameron or another AI. Add `--write-prompt` to save `prompt-message-<id>-<agent>.txt`. This mode does not write a response JSON.
+
+Use `--overwrite` only when you intentionally want to replace an existing response file.
+
+Three-command bridge flow:
+
+```powershell
+py .\scripts\nexusai_agent_worker.py --base-url http://nexus.aether.lab --agent Hermes --ack --auto-reply --auto-reply-mode bridge-file --bridge-fallback none
+py .\scripts\nexusai_bridge_responder.py --agent Hermes --bridge-dir .\scripts\bridge_queue --mode template
+py .\scripts\nexusai_agent_worker.py --base-url http://nexus.aether.lab --agent Hermes --ack --auto-reply --auto-reply-mode bridge-file --bridge-fallback none
+```
 
 Dry run:
 
