@@ -545,8 +545,32 @@ The responder reads at most one pending request and writes the matching response
 
 - `template` — deterministic local reply generation; no external API/model required.
 - `manual-prompt` — prints a ready-to-copy prompt for Cameron or another AI. Add `--write-prompt` to save `prompt-message-<id>-<agent>.txt`. This mode does not write a response JSON.
+- `openai` — uses the OpenAI API from the bridge/responder layer, not from the FastAPI app, to generate a real reply body for the selected agent. The worker still posts the response back through the normal NexusAI approval-gated reply path.
 
 Use `--overwrite` only when you intentionally want to replace an existing response file.
+
+OpenAI bridge responder setup:
+
+```powershell
+$env:OPENAI_API_KEY = "<your key>"
+$env:NEXUSAI_OPENAI_MODEL = "gpt-4.1-mini"
+```
+
+Optional environment labels already used elsewhere in NexusAI remain separate from the responder. Do not hardcode secrets; use environment variables or your scheduler's secret store.
+
+Hermes OpenAI responder:
+
+```powershell
+py .\scripts\nexusai_bridge_responder.py --agent Hermes --bridge-dir .\scripts\bridge_queue --mode openai
+```
+
+Mira OpenAI responder:
+
+```powershell
+py .\scripts\nexusai_bridge_responder.py --agent Mira --bridge-dir .\scripts\bridge_queue --mode openai
+```
+
+Approval behavior is unchanged: the responder only writes `response-message-<id>-<agent>.json`; `nexusai_agent_worker.py` still posts the reply, and AI-to-AI replies still require Cameron approval before delivery. If OpenAI mode is unavailable or undesirable, fall back to `template` or `manual-prompt` mode.
 
 Three-command bridge flow:
 

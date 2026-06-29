@@ -11,12 +11,18 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import textwrap
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
+
+try:
+    from openai import OpenAI
+except ImportError:  # pragma: no cover - exercised via runtime error path
+    OpenAI = None  # type: ignore[assignment]
 
 DEFAULT_RISK = "DOCUMENTATION ONLY"
 UNKNOWN_RISK = "UNKNOWN / NEEDS REVIEW"
@@ -42,6 +48,11 @@ INFRASTRUCTURE_TERMS = [
     "bookstack",
 ]
 READ_ONLY_TERMS = ["read-only", "readonly", "inspect", "review", "document", "documentation", "summarize", "check docs"]
+OPENAI_DEFAULT_MODEL = "gpt-4.1-mini"
+AGENT_SYSTEM_PROMPTS = {
+    "hermes": "You are Hermes, AETHER’s engineering assistant. You help design, build, debug, and review infrastructure and software for the AETHER lab. Be practical, concise, safety-aware, and collaborative. You may recommend commands or code, but you must not claim to have executed commands. Respect NexusAI as the approval and coordination layer.",
+    "mira": "You are Mira, AETHER’s documentation and operations assistant. You help summarize work, organize procedures, validate documentation, and keep AETHER’s institutional knowledge clear. Be structured, calm, precise, and operations-focused. You may recommend documentation updates, but you must not claim to have changed files or executed commands unless the system explicitly provides evidence.",
+}
 
 
 @dataclass(frozen=True)
@@ -183,6 +194,64 @@ def build_manual_prompt(request: dict[str, Any]) -> str:
     ).strip() + "\n"
 
 
+def agent_system_prompt(agent: str) -> str:
+    key = str(agent or "").strip().lower()
+    return AGENT_SYSTEM_PROMPTS.get(
+        key,
+        f"You are {agent}, an AETHER assistant replying through NexusAI. Be concise, safety-aware, and collaborative. Do not claim to have executed commands, changed files, restarted services, or modified infrastructure without explicit evidence in the request. Respect NexusAI as the approval and coordination layer.",
+    )
+
+
+def build_openai_input(request: dict[str, Any]) -> str:
+    return textwrap.dedent(
+        f"""
+        Reply as {request.get('agent', 'the selected agent')} to this NexusAI bridge request.
+
+        Requirements:
+        - Answer the message directly.
+        - Stay within the topic.
+        - Be concise.
+        - Do not claim to execute commands.
+        - Do not claim to have changed files, services, Docker, BookStack, GitHub, or Nora unless the request explicitly says that happened.
+        - If an action is requested, phrase it as a proposed next step or task.
+        - Respect that NexusAI remains the approval and coordination layer.
+        - Return reply text only, not JSON.
+
+        Suggested risk level for the wrapper metadata: {choose_risk(request)}
+
+        Request JSON:
+        {json.dumps(request, indent=2, ensure_ascii=False)}
+        """
+    ).strip()
+
+
+def get_openai_api_key() -> str:
+    api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    if not api_key:
+        raise ValueError("OPENAI_API_KEY is required for --mode openai")
+    return api_key
+
+
+def build_openai_client() -> Any:
+    if OpenAI is None:
+        raise RuntimeError("openai package is required for --mode openai. Install it in the NexusAI environment first.")
+    return OpenAI(api_key=get_openai_api_key())
+
+
+def generate_openai_reply(request: dict[str, Any], client_factory: Callable[[], Any] = build_openai_client) -> tuple[str, str]:
+    client = client_factory()
+    model = os.getenv("NEXUSAI_OPENAI_MODEL", OPENAI_DEFAULT_MODEL).strip() or OPENAI_DEFAULT_MODEL
+    response = client.responses.create(
+        model=model,
+        instructions=agent_system_prompt(str(request.get("agent") or "")),
+        input=build_openai_input(request),
+    )
+    reply_text = str(getattr(response, "output_text", "") or "").strip()
+    if not reply_text:
+        raise ValueError("OpenAI responder returned an empty reply")
+    return reply_text, choose_risk(request)
+
+
 def response_payload(request: dict[str, Any], reply_body: str, risk_level: str) -> dict[str, Any]:
     return {
         "message_id": int(request["message_id"]),
@@ -237,6 +306,18 @@ def process_one(args: argparse.Namespace) -> bool:
             print(f"Response already exists, not overwriting: {item.response_path}")
         return True
 
+    if args.mode == "openai":
+        reply_body, risk_level = generate_openai_reply(request)
+        payload = response_payload(request, reply_body, risk_level)
+        wrote = write_response(item.response_path, payload, overwrite=args.overwrite)
+        if wrote:
+            print(f"Wrote response JSON: {item.response_path}")
+            print(f"Risk level: {payload['risk_level']}")
+            print(f"OpenAI model: {os.getenv('NEXUSAI_OPENAI_MODEL', OPENAI_DEFAULT_MODEL).strip() or OPENAI_DEFAULT_MODEL}")
+        else:
+            print(f"Response already exists, not overwriting: {item.response_path}")
+        return True
+
     raise ValueError(f"unsupported mode: {args.mode}")
 
 
@@ -246,14 +327,15 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=(
             "Examples:\n"
             "  python scripts/nexusai_bridge_responder.py --agent Hermes --bridge-dir scripts/bridge_queue --mode template\n"
-            "  python scripts/nexusai_bridge_responder.py --agent Hermes --bridge-dir scripts/bridge_queue --mode manual-prompt --write-prompt\n\n"
+            "  python scripts/nexusai_bridge_responder.py --agent Hermes --bridge-dir scripts/bridge_queue --mode manual-prompt --write-prompt\n"
+            "  python scripts/nexusai_bridge_responder.py --agent Hermes --bridge-dir scripts/bridge_queue --mode openai\n\n"
             "Safety: this script never posts to NexusAI and never executes commands."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--agent", required=True, help="Agent name to respond as, e.g. Hermes")
     parser.add_argument("--bridge-dir", default=str(DEFAULT_BRIDGE_DIR), help="Directory containing bridge request/response JSON files")
-    parser.add_argument("--mode", choices=["template", "manual-prompt"], default="template", help="Responder mode")
+    parser.add_argument("--mode", choices=["template", "manual-prompt", "openai"], default="template", help="Responder mode")
     parser.add_argument("--overwrite", action="store_true", help="Overwrite an existing matching response file")
     parser.add_argument("--write-prompt", action="store_true", help="In manual-prompt mode, also write prompt-message-<id>-<agent>.txt")
     return parser
